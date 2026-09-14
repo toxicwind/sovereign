@@ -49,7 +49,6 @@ _probe() {
 # Probe the critical ones (add more as needed)
 _probe "llama-swap"        "http://127.0.0.1:25100/health"
 _probe "qdrant"            "http://127.0.0.1:25133/"
-_probe "mcpproxy"          "http://127.0.0.1:25109/health"
 _probe "ghas-api"          "http://127.0.0.1:25112/health"
 _probe "ghas-mcp"          "http://127.0.0.1:25113/health"
 _probe "prometheus"        "http://127.0.0.1:25105/-/healthy"

@@ -224,7 +224,7 @@
           {
             "name": "auto",
             "max_tokens": 262144,
-            "display_name": "Sovereign Hybrid (5-strategy matrix)",
+            "display_name": "Sovereign Hybrid (6-strategy matrix)",
             "capabilities": {
               "tools": true,
               "images": false,
@@ -587,7 +587,7 @@
   },
   "context_servers": {
     "mcpproxy-sovereign": {
-      "url": "http://127.0.0.1:25109/mcp",
+      "url": "http://127.0.0.1:25127/mcp",
       "enabled": true,
       "timeout": 120
     }

@@ -44,29 +44,25 @@ mise run down
 | **rust-web**          | **25101** | Rust                | Ops dashboard + embedded watchdog                                                                               |
 | **yote**              | 25102     | Bun                 | Telegram / status                                                                                               |
 | **openfang**          | **25103** | Rust (binary)       | Agent kernel — OpenFang OS, 206 models, 61 skills, Discord bridge                                               |
-| **sovereign-router**  | **25104** | Bun (TS)            | 5-strategy AST Matrix hybrid router (fifo_matrix, ast_race, sticky_affinity, weighted_elo, circuit_chain)       |
 | **prometheus**        | 25105     | Go                  | Metrics                                                                                                         |
 | **hf-downloader**     | 25106     | Bun                 | GGUF download UI                                                                                                |
 | **null-g-proxy**      | 25107     | Bun                 | Extra LLM proxy                                                                                                 |
-| **mcpproxy**          | 25109     | Go                  | MCP federation (43 MCPs → 1 endpoint)                                                                           |
+| **mcpproxy**          | 25127     | Go                  | MCP federation (43 MCPs → 1 endpoint)                                                                           |
 | **grafana**           | 25110     | Go                  | Optional dashboards                                                                                             |
 | **ghas-api**          | 25112     | Bun                 | GitHub Advanced Search API                                                                                      |
 | **ghas-mcp**          | 25113     | Bun                 | GHAS MCP (HTTP mode, depends on ghas-api)                                                                       |
 | **mesh-hub**          | 25115     | Bun                 | 20 GHAS-inspired features × every service                                                                       |
 | **byte-vision**       | 25121     | Go binary           | Vision MCP (OCR / screenshot analysis)                                                                          |
-| **byte-vision-proxy** | 25120     | Bun                 | **Sovereign MCP Gateway** — trust boundary + circuit breaker + sticky affinity in front of upstream MCP servers |
 | **tailscale-funnel**  | —         | Bash                | Tailscale Funnel exposure (public HTTPS endpoint)                                                               |
 | **redis**             | 25199     | Redis               | Session cache, telemetry backing store                                                                          |
-| **itvx-telemetry**    | 25198     | Docker              | Telemetry pipeline                                                                                              |
-| **itvx-browserless**  | 25130     | Docker              | Headless browser for scraping                                                                                   |
 
-Backends for swap: `LLAMA_START_PORT`–`LLAMA_END_PORT` = **25001–25099** (llama-server forks).
+Backends for swap: `BEELLAMA_PORT`=**25122**, `IK_LLAMA_PORT`=**25123**, `TURBO_PORT`=**25124** (llama-server forks).
 
 ### Llama-swap interfaces (both coexist — you pick)
 
 | Interface             | File                           | What it is                                                                                                  |
 | --------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| **Binary launcher**   | `stack/services/llama-swap.ts` | TypeScript launcher (Bun) — launches Go binary, health loop, fail loud. No `                                |     | true`. |
+| **Binary launcher**   | `stack/services/llama-swap.sh` | Shell launcher — launches the Go binary, health loop, fail loud.                                            |
 | **MCP stdio wrapper** | `src/mcp/llama_swap.ts`        | Bun MCP server (`StdioServerTransport`). Env-only config (no file reads). Used by MCP federation / gateway. |
 
 The launcher (`llama-swap.sh`) is the primary service entry. The MCP wrapper (`llama_swap.ts`) is an additional stdio interface for agent/MCP use. They share the same port (`LLAMA_SWAP_PORT=25100`) but serve different clients. Do not confuse them: the script launches a binary; the wrapper is a Bun process.
@@ -80,7 +76,7 @@ clients (Zed / OpenFang / Grok / IDEs)
    └─► llama-swap :25100   (toxicwind fork)
           │  internal/astmatrix/ — ELO scoring, circuit breakers, 6 strategies
           │  SQLite WAL health DB (modernc.org/sqlite)
-          └─► beellama | turboquant | ik_llama | ik_turboquant  (:25001–25099)
+          └─► beellama :25122 | ik_llama :25123 | turboquant :25124
 ```
 
 ### AST Matrix Go port (in llama-swap fork)
@@ -93,18 +89,7 @@ The TypeScript AST Matrix router (`tools/sovereign-router/sovereign-router-ts/ro
 - **7 providers:** llama-swap (local), OpenRouter, NVIDIA NIM, Groq, Cerebras, Google, Mistral
 - **40+ model aliases** mapped to CODING categories
 
-The standalone Bun `sovereign-router` at :25104 remains for external tooling use. The Go port inside llama-swap is the primary router.
-
-### Sovereign MCP Gateway (`:25120`)
-
-`tools/sovereign-router/sovereign-mcp-gateway/` is a trust boundary + resource allocator in front of upstream MCP servers (e.g. `byte-vision-mcp` on `:25121`). It applies the same routing theory as the LLM router:
-
-- **Circuit breaker** per upstream (closed/half/open) — a poisoned or down upstream is quarantined so it can't burn agent turns.
-- **Sticky session affinity** — `notifications/initialized` pins a session to one upstream (commitment game).
-- **Provenance-tagged tool union** — `tools/list` is namespaced `<upstream>__<tool>`; `server/discover` is synthesized locally from cached handshakes.
-- **502 failover** to the next healthy upstream.
-
-Self-serve: `GET /health`, `GET /ui`. Logic is unit-tested at 100% coverage (`bun run test:gateway:cov`).
+The standalone Bun `sovereign-router` (`tools/sovereign-router/sovereign-router-ts/`) remains in-tree for external tooling use — no port assigned in `config/ports.env`, not started by `mise run up`. The Go port inside llama-swap is the primary router.
 
 ### Sovereign Monitor — Agentic Runtime Intelligence
 
@@ -117,6 +102,28 @@ Self-serve: `GET /health`, `GET /ui`. Logic is unit-tested at 100% coverage (`bu
 | `repo-radar.ts`         | 100%     | Autonomous repo discovery via shallow GHAS queries; novelty scoring; autonomy signal detection                    |
 
 The recursive fallback is the **default failure discipline** for every non-trivial tool call: primary → fix_syntax (coerce input) → scaffold (write helper script) → borrow_ghas (discover pattern) → retrieve_tool (shallow MCP query) → recurse (decompose + retry smaller sub-problem) → escalate (watchdog trips). Each catch block has its own nested try/catch — no single point of failure.
+
+### Repo audit & maximal audit framework
+
+Two complementary audit systems live in this repo:
+
+**`skills/repo-audit/`** — repo-audit skill (see `SKILL.md`):
+
+- `repo_audit.py` — remote GitHub repo analysis via `gh` CLI (privacy/naming/topic signals)
+- `local_audit.py` — scans `/home/toxic/projects` for git repos, builds a tree-structure DataFrame, flags duplicates/symlinks
+- `projects.map` — benign path map of known projects (renamed from `projects.env` — the `.env` suffix was misleading)
+- Outputs: CSV, Parquet, JSON (`repo-audit.csv`, `repo-audit.parquet`, `repo-audit.json`)
+
+**`src/maximal-sovereign-agentic-audit/`** — maximal modular audit framework (`local-audit.ts` entry):
+
+- `modules/precheck.ts` — pre-flight checks; `modules/autofix.ts` — `--fix` auto-remediation
+- `modules/git-scanner.ts` + `modules/parser.ts` + `modules/dataframe.ts` — repo discovery and shaping
+- `modules/parquet.ts` — Parquet export; `modules/completions.ts` — LLM-assisted analysis (`--completions`)
+- `benchmark.ts` — audit benchmarking harness
+
+```bash
+bun src/maximal-sovereign-agentic-audit/src/index.ts -- [--json] [--parquet] [--fix] [--completions]
+```
 
 ### Quickshell Screenshot Integration
 
@@ -150,11 +157,10 @@ Access services **directly** on their ports (LAN or Tailscale MagicDNS). Optiona
  clients ──────────┼─ rust-web      :25101  (/, /ops/api/*, /health)
  (local/tailnet)   ├─ openfang      :25103  (agent kernel)
                     ├─ yote          :25102  (Telegram)
-                    ├─ mcpproxy      :25109  (43 MCPs federated)
+                    ├─ mcpproxy      :25127  (43 MCPs federated)
                     ├─ ghas-api      :25112  (GitHub search)
                     ├─ mesh-hub      :25115  (service mesh)
-                    ├─ byte-vision   :25121  (vision MCP)
-                    └─ byte-vision-p :25120  (Sovereign MCP Gateway: circuit-break + sticky + discover)
+                    └─ byte-vision   :25121  (vision MCP)
 
  optional: Tailscale Funnel → rust-web :25101 only (not multipath)
 ```
@@ -175,8 +181,8 @@ The **Sovereign Workspaces** repo is the unified workspace layer that operates i
 | **Mesh** | `mesh/` | MCP federation gateway | `:25127` |
 | **Tau** | `tau/` | Canonical AI coding agent engine | `:25192` |
 | **Yote** | `yote/` | Minimal embeddable agent runtime | `:25102` |
-| **OpenFang** | `openfang/` | C++ inference engine fork | `:25103` |
-| **QED** | `qed/` | AI-native editor (Zed fork) | `:25130` |
+| **OpenFang** | `openfang/` | Rust Agent OS (agent kernel) | `:25103` |
+| **QED** | `qed/` | AI-native editor (Zed fork) | — |
 | **Shell** | `shell/` | Desktop environment | Wayland |
 | **Boundless** | `boundless/` | Document ingestion & chunking | `:10200` |
 
@@ -204,12 +210,11 @@ After editing a process module: full `mise run down && mise run up` (pitchfork r
 
 ## Configuration
 
-| Source                             | Contents                            |
-| ---------------------------------- | ----------------------------------- |
-| **`config/ports.env`**             | Port SSOT (loaded by mise `_.file`) |
-| **`.env.local`**                   | Optional overrides / build flags    |
-| **`~/.secrets`**                   | Secrets (not in git)                |
-| **`tools/llama-swap/config.yaml`** | Model matrix, macros, backends      |
+| Source                 | Contents                            |
+| ---------------------- | ----------------------------------- |
+| **`config/ports.env`** | Port SSOT (loaded by mise `_.file`) |
+| **`.env.local`**       | Optional overrides / build flags    |
+| **`~/.secrets`**       | Secrets (not in git)                |
 
 Never invent port numbers in app code — use env / `src/lib/ports.ts` / `stack/lib-ports.sh`. All bind addresses use `0.0.0.0` for network accessibility (see `pitchfork.toml` for `ready_http` health checks which stay `127.0.0.1`).
 
@@ -221,37 +226,34 @@ Never invent port numbers in app code — use env / `src/lib/ports.ts` / `stack/
 sovereign/
 ├── README.md
 ├── AGENTS.md                 → global rules (symlink)
-├── bin/llama-swap            → fork binary (symlink → projects/llama-swap-main/)
 ├── config/ports.env          # SSOT ports
 ├── mise.toml + mise/tasks/   # up / down / health / doctor / e2e
 ├── pitchfork.toml            # native config (no generation)
 ├── stack/services/*.sh       # entry shims (llama-swap.sh, rust-web-hot.sh, ...)
 ├── src/                      # Bun apps (services, deploy, mcp, lib)
+├── src/maximal-sovereign-agentic-audit/  # maximal modular audit framework (local-audit.ts)
+├── skills/repo-audit/        # repo-audit skill (repo_audit.py, local_audit.py, projects.map)
 ├── rust_algo_web/            # rust-web dashboard + watchdog
-├── tools/llama-swap/         # runtime binary symlink + config.yaml + MODEL_INVENTORY
-├── tools/sovereign-router/         # TS sovereign-router router (standalone, port 25104)
-├── tools/sovereign-monitor/        # recursive-fallback, watchdog, repo-radar (agentic runtime)
-├── tests/                          # unit + integration tests (≥88% coverage enforced)
-├── grafana/provisioning/  # plugins/ + alerting/ dirs (empty but required)
-├── tailscale/                # optional Funnel (no Caddy)
-└── backup/                   # legacy — do not stage / do not delete casually
+├── tools/sovereign-router/   # TS sovereign-router (standalone; no SSOT port)
+├── tools/sovereign-monitor/  # recursive-fallback, watchdog, repo-radar (agentic runtime)
+├── tests/                    # unit + integration tests (≥88% coverage enforced)
+├── grafana/provisioning/     # plugins/ + alerting/ dirs (empty but required)
+└── tailscale/                # optional Funnel (no Caddy)
 ```
 
 ---
 
 ## Zed Provider Integration
 
-Zed is configured to connect directly to Sovereign Stack services. All provider configs live in `~/.config/zed/settings.json`.
+Zed is configured to connect directly to Sovereign Stack services. All provider configs live in `.zed/settings.json` (in-repo).
 
 ### Sovereign Stack providers
 
-| Provider                  | Wire                                | Port     | Why                                                                                                                  |
-| ------------------------- | ----------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
-| **nvidia**                | `NvidiaLanguageModelProvider`       | external | Direct NVIDIA NIM access (`integrate.api.nvidia.com/v1`). Inkling SUDO MAX, full JSON Schema, interleaved reasoning. |
-| **llama-swap**            | `LlamaCppLanguageModelProvider`     | `:25100` | Local GGUF inference via the toxicwind fork. Routes to beellama, turboquant, ik_llama backends on `:25001–25099`.    |
-| **sovereign-router**      | `openai_compatible` provider        | `:25104` | 5-strategy AST Matrix hybrid router (TS standalone). 24 models across 7 providers.                                   |
-| **Sovereign MCP Gateway** | `mcpproxy-sovereign` context server | `:25120` | Trust boundary + circuit breaker + sticky affinity in front of upstream MCP servers (e.g. byte-vision on `:25121`).  |
-| **mcpproxy**              | `mcpproxy-sovereign` context server | `:25109` | MCP federation (30+ MCPs → 1 endpoint). Connected via `mcp-remote` HTTP→stdio bridge.                                |
+| Provider          | Wire                            | Port     | Why                                                                                                               |
+| ----------------- | ------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| **nvidia**        | `NvidiaLanguageModelProvider`   | external | Direct NVIDIA NIM access (`integrate.api.nvidia.com/v1`). Inkling SUDO MAX, full JSON Schema, interleaved reasoning. |
+| **llama-swap**    | `LlamaCppLanguageModelProvider` | `:25100` | Local GGUF inference via the toxicwind fork. Routes to beellama (`:25122`), ik_llama (`:25123`), turboquant (`:25124`) backends. |
+| **mcpproxy**      | `mcpproxy-sovereign` context server | `:25127` | MCP federation (30+ MCPs → 1 endpoint). Connected via `mcp-remote` HTTP→stdio bridge.                          |
 
 ### OpenCode provider
 
@@ -259,12 +261,12 @@ The **OpenCode** provider (`opencode` in settings) connects to a subscription-ba
 
 ### Bounty providers (OpenAI-compatible)
 
-Free/keyless endpoints configured under `language_models.openai_compatible` (via sovereign-router at `:25104`):
+Free/keyless endpoints configured under `language_models.openai_compatible` (via the standalone sovereign-router — no SSOT port assigned):
 
 | Name                             | Model                       | Auth             |
 | -------------------------------- | --------------------------- | ---------------- |
-| **Sovereign Hybrid**             | `auto` (5-strategy routing) | Local (`:25104`) |
-| **Free Coding Model**            | `fcm`                       | Local (`:25104`) |
+| **Sovereign Hybrid**             | `auto` (6-strategy routing) | Local (standalone router) |
+| **Free Coding Model**            | `fcm`                       | Local (standalone router) |
 | **Tencent Hy3**                  | `hy3`                       | OpenRouter free  |
 | **Poolside Laguna M.1**          | `laguna-m1`                 | OpenRouter free  |
 | **Poolside Laguna XS**           | `laguna-xs`                 | OpenRouter free  |
@@ -273,7 +275,7 @@ Free/keyless endpoints configured under `language_models.openai_compatible` (via
 | **Nemotron 3 Nano**              | `nemotron-nano`             | OpenRouter free  |
 | **Qwen3 Coder**                  | `qwen3-coder`               | OpenRouter free  |
 | **Llama 3.3 70B**                | `llama-3.3-70b-free`        | OpenRouter free  |
-| **Hermes 3 405B**                | `hermes-3-405b`             | OpenRouter free  |
+| **Hermes 3 405B**                | `hermes-3-405b-free`        | OpenRouter free  |
 | **GPT-OSS 20B**                  | `gpt-oss-20b`               | OpenRouter free  |
 | **NVIDIA NIM Nemotron 3 Super**  | `nim-nemotron-super`        | NVIDIA NIM       |
 | **NVIDIA NIM Nemotron 3 Nano**   | `nim-nemotron-nano`         | NVIDIA NIM       |
@@ -287,26 +289,13 @@ Free/keyless endpoints configured under `language_models.openai_compatible` (via
 | **NVIDIA NIM Gemma 4 31B**       | `nim-gemma4-31b`            | NVIDIA NIM       |
 | **NVIDIA NIM GLM 5.2**           | `nim-glm5.2`                | NVIDIA NIM       |
 
-### Custom Zed providers (in-tree)
-
-| Provider                   | File                                                            | Why                                                                                                                                                                                |
-| -------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **nvidia**                 | `crates/language_models/src/provider/nvidia.rs`                 | Full JSON Schema for NVIDIA NIM (Inkling). Avoids the `JsonSchemaSubset` → vLLM 500 loop on large MCP tool sets. Supports `interleaved_reasoning` (msg-level `reasoning_content`). |
-| **openai-mcpproxy**        | `crates/language_models/src/provider/openai_mcpproxy.rs`        | OpenAI-compatible endpoint fronted by mcpproxy compact router. Same schema hardening + self-healing event mapper.                                                                  |
-| **openai-mcpproxy-nvidia** | `crates/language_models/src/provider/openai_mcpproxy_nvidia.rs` | Inkling through third-party OpenAI-compatible gateway (e.g. OpenRouter→Inkling). Includes **Proxy Bounty Hunter** alias.                                                           |
-| **opencode**               | `crates/language_models/src/provider/opencode.rs`               | Subscription-based multi-backend gateway with auto-discover and reasoning support.                                                                                                 |
-
-All custom providers share a **non-destructive tool-schema normalizer** (repairs missing root `type`, untyped properties, bare `null` in multi-type arrays) and a **self-healing event mapper** that turns malformed tool-call parse errors into valid `ToolUse` with `{}` input — breaking infinite retry loops on 120+ tool sets.
-
 ---
 
 ## Related forks (docs live in those repos)
 
-| Project                | Path                                   | README focus                                                                                                       |
-| ---------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **llama-swap**         | `/home/toxic/projects/llama-swap-main` | **Fork additions**: AST Matrix Go port (`internal/astmatrix/`), `/models/sse`, `normalize_sse`, IPv4, port reclaim |
-| **llama-swap runtime** | `tools/llama-swap/README.md`           | Sovereign wiring only (symlink → fork binary)                                                                      |
-| **Zed**                | `/home/toxic/projects/zed`             | **toxicwind fork**: `.ignore` for agent grep, sccache+mold builds                                                  |
+| Project        | Path                                   | README focus                                                                                                       |
+| -------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **llama-swap** | `/home/toxic/projects/llama-swap-main` | **Fork additions**: AST Matrix Go port (`internal/astmatrix/`), `/models/sse`, `normalize_sse`, IPv4, port reclaim |
 
 ---
 
