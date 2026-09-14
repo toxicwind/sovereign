@@ -53,7 +53,7 @@ python3 sovereign/skills/repo-audit/repo_audit.py \
 | `--threshold`, `-t` | `0` | Minimum stars to consider for analysis |
 | `--private-only` | `false` | Only analyze currently private repositories |
 | `--public-only` | `false` | Only analyze currently public repositories |
-| `--load-env-map` | `true` | Load projects.env for cross-referencing |
+| `--load-env-map` | `true` | Load projects.map for cross-referencing |
 
 ## Procedure (local_audit.py)
 
@@ -84,7 +84,7 @@ python3 sovereign/skills/repo-audit/repo_audit.py \
    - Fetches topics via GitHub API
    - Checks name, description, and topics for private-indicating patterns
    - Determines if repo should be private based on patterns
-4. **Cross-reference**: Optionally loads projects.env to map repos to local paths
+4. **Cross-reference**: Optionally loads projects.map to map repos to local paths
 5. **Output**: Results written as CSV and/or Parquet with columns:
    - owner, name, visibility, private, should_be_private, reasons
    - stars, fork, description, topics, html_url
